@@ -235,9 +235,12 @@ error and silently see nothing.
 
 Workarounds:
 
-- Rely on the scanner — at default 30 s interval, throughput is
+- Rely on the scanner — at the default 30 s interval, throughput is
   bounded but eventually-consistent.
-- Drop the scan interval to ~5 s if the memory root is small.
+- Shorten the interval if the memory root is small:
+  `scan_interval_seconds = 5.0` under `[cascade]` in `everos.toml`, or
+  `EVEROS_CASCADE__SCAN_INTERVAL_SECONDS=5`. Every sweep stats every md
+  file, so over a slow mount a short interval is a steady I/O cost.
 - With no server running, run `everos cascade sync` explicitly after batch
   edits. A running server picks them up itself, and `sync` refuses to run
   next to it (exit code 3): two processes writing the same index insert
@@ -303,7 +306,7 @@ and `everos.memory.cascade.worker.CascadeWorker`:
 
 | Knob | Default | Effect |
 |---|---|---|
-| `scan_interval_seconds` | 30 | Scanner sweep cadence |
+| `scan_interval_seconds` | 30 | Scanner sweep cadence — also settable under `[cascade]` |
 | `worker_batch_size` | 50 | Rows claimed per worker cycle |
 | `worker_max_retry` | 3 | Inline retries before `mark_failed(retryable=TRUE)` |
 | `worker_poll_interval_seconds` | 1 | Idle wait between empty drain attempts |
