@@ -518,6 +518,15 @@ class LanceDBSettings(BaseModel):
 
     read_consistency_seconds: float | None = None
     index_cache_size_bytes: int = 16 * 1024 * 1024
+    vector_index_min_rows: int = Field(default=2000, ge=1)
+    """Rows (with a non-null vector) a table needs before its vector columns
+    get an ANN index. Below this a brute-force scan is cheaper than the
+    index; above it the scan grows linearly with the table — 27k rows of
+    1024-dim vectors was 112 MB and ~0.6 s per query on a laptop SSD, and
+    a hybrid search runs two or three of them. Applied by the cascade worker
+    only: its first rebuild sweep after server start builds a missing index
+    and the heavy maintenance beat keeps it healthy. The CLI never builds
+    one (it would race the running server's commits)."""
 
 
 class CascadeSettings(BaseModel):

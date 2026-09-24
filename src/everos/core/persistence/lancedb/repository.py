@@ -52,6 +52,16 @@ sized in the hundreds of seconds: the budget doubles as the detection latency
 for a wedged table."""
 
 _REBUILD_TIMEOUT_SECONDS = 300.0
+
+
+def _vector_index_min_rows() -> int:
+    """``[lancedb] vector_index_min_rows`` — imported lazily so this module
+    stays free of the settings import at load time (same as MemoryRoot)."""
+    from everos.config.settings import load_settings
+
+    return load_settings().lancedb.vector_index_min_rows
+
+
 """Index rebuild (drop + recreate every index) — the one genuinely slow
 critical section, measured at ~0.3s per 50k rows per indexed column, so 5
 minutes covers a multi-million-row table with wide headroom."""
@@ -136,8 +146,9 @@ therefore stops the whole md -> LanceDB projection, leaving claimed rows in
 ``processing`` forever with nothing logged (a hang raises nothing, so the
 drain-failure counter stays at zero and ``/health`` keeps reporting healthy).
 Same last-resort shape as :data:`_COMPACT_TIMEOUT_SECONDS`, and generous by
-design: everos builds no vector ANN index, so reads are flat scans — measured
-~62ms over 117k rows, i.e. 60s is ~1000x headroom and never fires normally. On
+design: a vector read is an IVF probe, or a flat scan below the index
+threshold — measured ~62ms over 117k unindexed rows, i.e. 60s is ~1000x
+headroom and never fires normally. On
 expiry the caller gets a retryable :class:`VectorStoreBusyError`, so a drain row
 is retried and a search request fails with a structured error rather than
 hanging the request."""
@@ -669,13 +680,29 @@ class LanceRepoBase[T: BaseLanceTable]:
             # ``return_exceptions``, so the whole search request 500s. Only
             # indexes on columns that are no longer indexed at all get dropped;
             # nothing queries those, so their drop opens no window.
-            wanted = set(self.schema.BM25_FIELDS or ())
+            wanted = set(self.schema.BM25_FIELDS or ()) | set(
+                self.schema.vector_columns()
+            )
             for idx in await table.list_indices():
                 if not wanted.intersection(idx.columns or ()):
                     await table.drop_index(idx.name)
             await self.schema.ensure_fts_indexes(table, replace=True)
+            await self.schema.ensure_vector_indexes(
+                table, min_rows=_vector_index_min_rows()
+            )
 
     # ── Read ───────────────────────────────────────────────────────────────
+
+    async def ensure_vector_indexes(self) -> list[str]:
+        """Build the ANN index on vector columns that crossed the row
+        threshold since startup, and retrain one whose delta indices piled
+        up — the cascade's heavy beat calls this; the cases are spelled out
+        on :meth:`BaseLanceTable.ensure_vector_indexes`."""
+        async with self._locked(_REBUILD_TIMEOUT_SECONDS, "ensure_vector_indexes"):
+            table = await self._table()
+            return await self.schema.ensure_vector_indexes(
+                table, min_rows=_vector_index_min_rows()
+            )
 
     async def count(self) -> int:
         """Total row count."""
